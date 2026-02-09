@@ -69,14 +69,12 @@ func (h *Hub) Publish(topic string, event model.Update) error {
 		select {
 		case s.events <- event:
 		default:
-			// indicate that it's dropped, and delete the subscription. Don't keep slow channels.
 			select {
 			case s.rst <- true:
-				slowSubs = append(slowSubs, s)
-				log.Println("Slow subscription detected")
 			default:
-				slowSubs = append(slowSubs, s)
 			}
+			// indicate that it's dropped, and delete the subscription. Don't keep slow channels.
+			slowSubs = append(slowSubs, s)
 		}
 	}
 	h.lock.Lock()

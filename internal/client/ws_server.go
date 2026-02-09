@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -56,31 +55,26 @@ func listenToHub(hub pubsub.Subscriber, service orderbook.Service) func(http.Res
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		writeCh := make(chan []byte, 100)
-		go readLoop(ctx, cancel, conn)
+		go readLoop(cancel, conn)
 		go writeLoop(ctx, conn, writeCh)
 
-		var wg sync.WaitGroup
-
 		for _, symbol := range symbols {
-			go getUpdates(symbol, hub, service, writeCh, &wg)
-			wg.Add(1)
+			go handleSymbolStream(r.Context(), symbol, hub, service, writeCh)
 		}
-		wg.Wait()
-
+		<-ctx.Done()
 	}
 }
 
-func getUpdates(symbol string, hub pubsub.Subscriber, service orderbook.Service, returnCh chan<- []byte, wg *sync.WaitGroup) {
-	defer wg.Done()
-	defer fmt.Println("calling wg.Done()")
+func handleSymbolStream(ctx context.Context, symbol string, hub pubsub.Subscriber, service orderbook.Service, returnCh chan<- []byte) {
 	updateCh := make(chan model.Update, 100)
 	rst := make(chan bool)
-	fmt.Println("ws connection subs", symbol)
+
 	err := hub.Subscribe(symbol, updateCh, rst)
+	defer hub.Unsubscribe(symbol, updateCh)
 	if err != nil {
 		return
 	}
-	snapshot, _ := service.GetSnapshot(nil, symbol)
+	snapshot, _ := service.GetSnapshot(ctx, symbol)
 	expectedFirstUpdateId := snapshot.LastUpdateId + 1
 	//wait for correct update thing
 	synced := false
@@ -107,20 +101,25 @@ func getUpdates(symbol string, hub pubsub.Subscriber, service orderbook.Service,
 				bytes, _ := json.Marshal(update)
 				returnCh <- bytes
 			}
+		case <-rst:
+			// reset signal from the hub. Need to disconnect.
+			return
+		case <-ctx.Done():
+			_ = hub.Unsubscribe(symbol, updateCh)
+			return
 		}
 	}
 
 }
 
-func readLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn) {
+func readLoop(cancel context.CancelFunc, conn *websocket.Conn) {
 	defer cancel()
 	conn.SetReadLimit(1024)
-	//_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	//conn.SetPongHandler(func(string) error {
-	//	err := conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-	//	return err
-	//})
-
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 	for {
 		msgType, msg, err := conn.ReadMessage()
 		if err != nil {
