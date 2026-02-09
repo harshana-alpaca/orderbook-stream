@@ -115,11 +115,6 @@ func getUpdates(symbol string, hub pubsub.Subscriber, service orderbook.Service,
 func readLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn) {
 	defer cancel()
 	conn.SetReadLimit(1024)
-	//_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	//conn.SetPongHandler(func(string) error {
-	//	err := conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-	//	return err
-	//})
 
 	for {
 		msgType, msg, err := conn.ReadMessage()
